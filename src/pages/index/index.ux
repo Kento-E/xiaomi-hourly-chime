@@ -1,0 +1,179 @@
+<template>
+  <div class="page">
+    <text class="title">Phase 0</text>
+    <input class="btn" type="button" value="Short" onclick="vibeShort" />
+    <input class="btn" type="button" value="Long" onclick="vibeLong" />
+    <input class="btn" type="button" value="{{timerLabel}}" onclick="toggleTimer" />
+    <text class="info">{{status}}</text>
+    <text class="info">{{lastLines}}</text>
+  </div>
+</template>
+
+<style>
+  .page {
+    flex-direction: column;
+    align-items: center;
+    padding: 12px;
+    background-color: #000000;
+  }
+  .title {
+    font-size: 24px;
+    color: #ffffff;
+    margin-bottom: 8px;
+  }
+  .btn {
+    width: 180px;
+    height: 44px;
+    margin-top: 8px;
+    border-radius: 22px;
+    font-size: 20px;
+    color: #ffffff;
+    background-color: #09ba07;
+  }
+  .info {
+    margin-top: 8px;
+    font-size: 16px;
+    color: #cccccc;
+    text-align: center;
+  }
+</style>
+
+<script>
+  import vibrator from '@system.vibrator'
+  import storage from '@system.storage'
+
+  const TICK_MS = 60 * 1000
+  const TOTAL_TICKS = 30
+  const LOG_KEY = 'feas.log'
+  const LOG_MAX = 40
+
+  export default {
+    private: {
+      running: false,
+      timerLabel: 'Start 30min',
+      status: 'idle',
+      lastLines: ''
+    },
+
+    onInit() {
+      this.timer = null
+      this.startAt = 0
+      this.count = 0
+      this.logLines = []
+    },
+
+    onShow() {
+      this.loadLog()
+    },
+
+    onDestroy() {
+      this.clearTimer()
+    },
+
+    vibeShort() {
+      vibrator.vibrate({ mode: 'short' })
+    },
+
+    vibeLong() {
+      vibrator.vibrate({ mode: 'long' })
+    },
+
+    toggleTimer() {
+      if (this.running) {
+        this.stopTimer('stopped')
+      } else {
+        this.startTimer()
+      }
+    },
+
+    startTimer() {
+      this.running = true
+      this.timerLabel = 'Stop'
+      this.count = 0
+      this.startAt = Date.now()
+      this.logLines = []
+      this.appendLog('start ' + this.fmt(this.startAt))
+      this.scheduleNext()
+    },
+
+    // setTimeout chain: next tick is computed from startAt to avoid drift accumulation
+    scheduleNext() {
+      const target = this.startAt + (this.count + 1) * TICK_MS
+      const delay = Math.max(0, target - Date.now())
+      this.timer = setTimeout(() => this.onTick(target), delay)
+    },
+
+    onTick(target) {
+      const now = Date.now()
+      this.count += 1
+      const driftSec = Math.round((now - target) / 1000)
+      vibrator.vibrate({ mode: 'short' })
+      this.appendLog(
+        '#' + this.count + ' ' + this.fmt(now) + ' d=' + driftSec + 's'
+      )
+      if (this.count >= TOTAL_TICKS) {
+        this.stopTimer('done')
+      } else {
+        this.scheduleNext()
+      }
+    },
+
+    stopTimer(reason) {
+      this.clearTimer()
+      this.running = false
+      this.timerLabel = 'Start 30min'
+      this.appendLog(reason + ' ' + this.fmt(Date.now()))
+    },
+
+    clearTimer() {
+      if (this.timer !== null) {
+        clearTimeout(this.timer)
+        this.timer = null
+      }
+    },
+
+    appendLog(line) {
+      this.logLines.push(line)
+      if (this.logLines.length > LOG_MAX) {
+        this.logLines.shift()
+      }
+      this.render()
+      storage.set({
+        key: LOG_KEY,
+        value: JSON.stringify(this.logLines),
+        fail: (data, code) => console.error('storage.set fail ' + code)
+      })
+    },
+
+    loadLog() {
+      storage.get({
+        key: LOG_KEY,
+        default: '[]',
+        success: (data) => {
+          if (this.running) {
+            return
+          }
+          try {
+            this.logLines = JSON.parse(data)
+          } catch (e) {
+            this.logLines = []
+          }
+          this.render()
+        },
+        fail: (data, code) => console.error('storage.get fail ' + code)
+      })
+    },
+
+    render() {
+      const n = this.logLines.length
+      this.status = 'ticks=' + this.count + ' lines=' + n
+      this.lastLines = this.logLines.slice(-4).join('\n')
+    },
+
+    fmt(ms) {
+      const d = new Date(ms)
+      const p = (v) => (v < 10 ? '0' + v : '' + v)
+      return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+    }
+  }
+</script>
